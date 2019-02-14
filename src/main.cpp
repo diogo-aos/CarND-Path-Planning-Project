@@ -3,8 +3,11 @@
 #include <iostream>
 #include <string>
 #include <vector>
+
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
+#include "Eigen-3.3/Eigen/Dense"
+
 #include "helpers.h"
 #include "json.hpp"
 
@@ -12,6 +15,69 @@
 using nlohmann::json;
 using std::string;
 using std::vector;
+
+using Eigen::MatrixXd;
+using Eigen::VectorXd;
+
+double GOAL_SPEED = 50; //mph
+double TARGET_SPEED = 50; //mph
+
+double poly5_x(vector<double> &coefs, double x){
+  double res=coefs[0];
+  double exp=x;
+  for (int i=1; i<6; i++){
+    res += coefs[i] * x;
+    x *= x;
+  }
+}
+
+double poly5_vx(vector<double> &coefs, double duration, int n_steps){
+  vector<double> out;
+  double inc = duration / n_steps;
+  for(int i=1; i<=n_steps; i++)
+    out.push_back(poly5_x(coefs, i*inc);
+  return out;
+
+}
+
+vector<double> JMT(vector<double> &start, vector<double> &end, double T) {
+  /**
+   * Calculate the Jerk Minimizing Trajectory that connects the initial state
+   * to the final state in time T.
+   *
+   * @param start - the vehicles start location given as a length three array
+   *   corresponding to initial values of [s, s_dot, s_double_dot]
+   * @param end - the desired end state for vehicle. Like "start" this is a
+   *   length three array.
+   * @param T - The duration, in seconds, over which this maneuver should occur.
+   *
+   * @output an array of length 6, each value corresponding to a coefficent in 
+   *   the polynomial:
+   *   s(t) = a_0 + a_1 * t + a_2 * t**2 + a_3 * t**3 + a_4 * t**4 + a_5 * t**5
+   *
+   * EXAMPLE
+   *   > JMT([0, 10, 0], [10, 10, 0], 1)
+   *     [0.0, 10.0, 0.0, 0.0, 0.0, 0.0]
+   */
+   double a0 = start[0],
+          a1 = start[1],
+          a2 = start[2] / 2;
+          
+   //A.X=B -> X=A-1.B
+    MatrixXd A(3,3);
+    MatrixXd B(3,1);
+    A << pow(T, 3), pow(T, 4), pow(T, 5),
+         3*pow(T, 2), 4*pow(T, 3), 5*pow(T,4),
+         6*T, 12*pow(T, 2), 20*pow(T, 3);
+    B << end[0] - (start[0] + start[1] * T + start[2] * pow(T, 2) / 2),
+         end[1] - (start[1] + start[2] * T),
+         end[2] - start[2];
+         
+    MatrixXd X = A.inverse() * B;
+
+  return {a0, a1, a2, X.data()[0], X.data()[1], X.data()[2]};
+}
+
 
 int main() {
   uWS::Hub h;
@@ -97,6 +163,12 @@ int main() {
            * TODO: define a path made up of (x,y) points that the car will visit
            *   sequentially every .02 seconds
            */
+	  
+	  std::cout << "sensor_fusion" << std::endl;
+	  for(int i=0; i<sensor_fusion.size(); i++){
+	    std::cout << "id:" << sensor_fusion[i][0] << "\t s:" << sensor_fusion[i][5] << "\t d:" << sensor_fusion[i][6] << std::endl;
+	  }
+	  std::cout << "car_s:" << car_s << "\t car_d:" << car_d << std::endl;
 
 	  int current_state = 0;
 	  int next_state = 0;
@@ -123,38 +195,23 @@ int main() {
 
 	  std::cout << previous_path_x.size() << std::endl;
 
-	  double pos_x;
-	  double pos_y;
-	  double angle;
-	  int path_size = previous_path_x.size();
-
-	  for (int i = 0; i < path_size; ++i) {
-	    next_x_vals.push_back(previous_path_x[i]);
-	    next_y_vals.push_back(previous_path_y[i]);
+	  double dist_inc = (TARGET_SPEED * 1.6) * 1000 / 3600 / 50;
+	  std::cout << "dist_inc=" << dist_inc << std::endl;
+	  //dist_inc = 0.4;
+	  double s, d;
+	  vector <double> xy;
+	  s = car_s;
+	  d = car_d;
+	  xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+	  next_x_vals.push_back(xy[0]);
+	  next_y_vals.push_back(xy[1]);
+	  for (int i=1; i<50; i++){
+	    s = s + dist_inc;
+	    d = d;
+	    xy = getXY(s, d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+	    next_x_vals.push_back(xy[0]);
+	    next_y_vals.push_back(xy[1]);
 	  }
-
-	  if (path_size == 0) {
-	    pos_x = car_x;
-	    pos_y = car_y;
-	    angle = deg2rad(car_yaw);
-	  } else {
-	    pos_x = previous_path_x[path_size-1];
-	    pos_y = previous_path_y[path_size-1];
-
-	    double pos_x2 = previous_path_x[path_size-2];
-	    double pos_y2 = previous_path_y[path_size-2];
-	    angle = atan2(pos_y-pos_y2,pos_x-pos_x2);
-	  }
-
-	  double dist_inc = 0.5;
-	  for (int i = 0; i < 50-path_size; ++i) {    
-	    next_x_vals.push_back(pos_x+(dist_inc)*cos(angle+(i+1)*(pi()/100)));
-	    next_y_vals.push_back(pos_y+(dist_inc)*sin(angle+(i+1)*(pi()/100)));
-	    pos_x += (dist_inc)*cos(angle+(i+1)*(pi()/100));
-	    pos_y += (dist_inc)*sin(angle+(i+1)*(pi()/100));
-	  }
-
-          
 
 
           msgJson["next_x"] = next_x_vals;
