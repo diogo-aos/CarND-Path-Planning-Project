@@ -1,4 +1,3 @@
-
-sudo docker run --rm -i -t -v /home/chiro/workspace/self_driving_car/term3/CarND-Path-Planning-Project:/code -w /code -p 127.0.0.1:4567:4567 pathplanning sh build.sh
-
+sudo docker stop project
+sudo docker rm project
 sudo docker run --rm -i -t --name project -v /home/chiro/workspace/self_driving_car/term3/CarND-Path-Planning-Project:/code -w /code -p 127.0.0.1:4567:4567 pathplanning 
