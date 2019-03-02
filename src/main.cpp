@@ -13,7 +13,19 @@
 #include "helpers.h"
 #include "json.hpp"
 
+/* * * * * * * * * * * * * * * * * * * * * * * * *
+ *
+ *         MY CONSTANTS
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * */
+
+
 #define DEBUG 0
+
+/* * * * * * * * * * * * * * * * * * * * * * * * *
+ *                                               *
+ *                                               *
+ * * * * * * * * * * * * * * * * * * * * * * * * */
 
 // for convenience
 using nlohmann::json;
@@ -23,10 +35,64 @@ using std::vector;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
+
+/* * * * * * * * * * * * * * * * * * * * * * * * *
+ *
+ *         MY VARIABLES
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * */
+
 double GOAL_SPEED = 22.13; //ms = 49.8mph
 double TARGET_SPEED = 49.5; //ms
 
+double SLOW_ACC = 0.22369;  // 5m.s^2
+double FAST_ACC = 0.4250186;  // 9.5m.s^2
+
 double ref_speed = 0; //mph
+int lane = 1;
+
+double acc;
+
+class Car {
+public:
+  int id;
+
+  double x;
+  double y;
+
+  double vx;
+  double vy;
+
+  double v;
+
+  double s;
+  double d;
+
+  double compute_speed(){
+    v = sqrt(vx*vx + vy*vy);
+    return v;
+  }
+
+};
+
+
+// keep track of other cars
+vector <Car> cars;
+
+/* * * * * * * * * * * * * * * * * * * * * * * * *
+ *                                               *
+ *                                               *
+ * * * * * * * * * * * * * * * * * * * * * * * * */
+
+
+void log_print(char * str, int level){
+  /*
+   * 0 - DEBUG ALL
+   * 1 - DEBUG DEV
+   */
+  if (level >= DEBUG)
+    std::cout << str << std::endl;
+}
 
 double poly5_x(vector<double> &coefs, double x){
 
@@ -179,18 +245,25 @@ int main() {
            *   sequentially every .02 seconds
            */
 
-int lane = 1;
-int n_wps = 50;
 
 
-int prev_size = previous_path_x.size();
+          /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+           *      
+	   *              START OF CODE
+           *   
+           * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+
+
+
+	  int n_wps = 50;
+	  int prev_size = previous_path_x.size();
 
 	  // print car state
 	  std::cout << "------------------------------------------" << std::endl;
 	  std::cout << "x:" << car_x << "\t y:" << car_y << "\t yaw:" << car_yaw << std::endl;
 	  std::cout << "s:" << car_s << "\t d:" << car_d << "\t speed:" << car_speed << std::endl;
-	  std::cout << "ref speed:" << ref_speed << std::endl;
+	  std::cout << "lane:" << lane << "\tref speed:" << ref_speed << std::endl;
 	  std::cout << "Previous path size: " << prev_size << "\t consumed " << n_wps - previous_path_x.size() << " waypoints" << std::endl;
 	  std::cout << "consumed " << n_wps - previous_path_x.size() << " waypoints" << std::endl;
 
@@ -204,188 +277,253 @@ int prev_size = previous_path_x.size();
 #endif
 
 
-if(prev_size > 0){
-  car_s = end_path_s;
-}
+	  if(prev_size > 0){
+	    car_s = end_path_s;
+	  }
 
-bool too_close = false;
 
-//find ref_v to use
-for (int i=0; i < sensor_fusion.size(); i++){
 
-  //car is in my lane
-  double d = sensor_fusion[i][6];
-  double my_lane_center = 2 * 4 * lane;
-  if (d > my_lane_center - 2 && d < my_lane_center + 2){
-    double vx = sensor_fusion[i][3];
-    double vy = sensor_fusion[i][4];
-    double check_speed = sqrt(vx*vx + vy*vy);
-    double check_car_s = sensor_fusion[i][5];
+          /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+           *      
+	   *              CHECK OTHER CARS
+           *   
+           * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+	  std::cout << "PHASE | Checking other cars..." << std::endl;
+
+
+	  bool too_close = false;
+	  double lane_forward[3];
+	  double lane_backward[3];
+
+	  vector <double> check_s_t;
+
+
+	  double my_lane_center = lane * 4 + 2;
+
+
+	  // update our internal library of cars
+	  for (int i=0; i < sensor_fusion.size(); i++){
+	    int id = sensor_fusion[i][0];
+	    int cars_i=cars.size();  // by default assume it's a new car that will be added
+
+	    // look for this car's ID in our car library
+	    for (int j=0; j<cars.size(); j++){
+	      if (cars[j].id == id){  // found car id in library!
+		cars_i = j;
+		break;
+	      }
+	    }
+
+	    // if it's not in library, create new car
+	    if (cars_i == cars.size()){
+	      Car C;
+	      C.id = id;
+	      cars.push_back(C);
+	    }
+
+	    // update this car's values from sensor fusion
+	    cars[cars_i].id = sensor_fusion[i][0];
+	    cars[cars_i].d = sensor_fusion[i][6];
+	    cars[cars_i].s = sensor_fusion[i][5];
+	    cars[cars_i].vx = sensor_fusion[i][3];
+	    cars[cars_i].vx = sensor_fusion[i][4];
+	    cars[cars_i].compute_speed();
+	  }
+
+	  //find ref_v to use
+	  for (int i=0; i < cars.size(); i++){
+	    // print car info
+	    std::cout << "Car " << cars[i].id;
+	    std::cout << "\tv:" << cars[i].v * 2.23694;
+	    std::cout << "\ts:" << cars[i].s;
+	    std::cout << "\td:" << cars[i].s << std::endl;
+
+	    // transform check_s so car_s is reference
+
+	    //car is in my lane
+	    if ( (cars[i].d > my_lane_center - 2) && (cars[i].d < my_lane_center + 2) ){
     
-    // if using previous points can project s value out
-    check_car_s += ((double) prev_size * 0.02 * check_speed);  
+	      // if using previous points can project s value out
+	      double check_s = cars[i].s;
+	      check_s += ((double) prev_size * 0.02 * cars[i].v);  
+	      
+	      //check s values greater than mine and s gap
+	      if ((check_s > car_s) && (check_s-car_s) < 30){
+		std::cout << "Car " << cars[i].id << "triggered lane change" << std::endl;
+		std::cout << "my_lane_center:" << my_lane_center << std::endl;
+		//do some logic here, lower reference velocity so we don't crash 
+		// into the car in front of us, ould also flag to try to change
+		// lanes
+		//ref_speed = check_speed; //mph
+		too_close = true;
+		if (lane > 0) {
+		  lane = 0;
+		}
+	      }
+	    } // end if car is in my lane
+	  } // end for sensor fusion
 
-    //check s values greater than mine and s gap
-    if ((check_car_s > car_s) && (check_car_s-car_s) < 30){
-      //do some logic here, lower reference velocity so we don't crash 
-      // into the car in front of us, ould also flag to try to change
-      // lanes
-      //ref_speed = check_speed; //mph
-      too_close = true;
-      if (lane > 0) {
-	lane = 0;
-      }
+	  if (too_close){
+	    ref_speed -= FAST_ACC;
+	  }
+	  else if(ref_speed < TARGET_SPEED){
+	    ref_speed += FAST_ACC;
+	  }
 
-    }
-  } // end if car is in my lane
-} // end for sensor fusion
-
-if (too_close){
-  ref_speed -= .224;
- }
- else if(ref_speed < TARGET_SPEED){
-   ref_speed += .224;
- }
+          /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+           *      
+	   *              DECISION MAKING
+           *   
+           * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 
 
 
-// Create a list of widely spaced (x,y) waypoints, evenly spaced at 30m
-// later we will interpolate these waypoints with a spline and fill it
-// in with more points that control speed.
-vector <double> ptsx;
-vector <double> ptsy;
+
+          /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+           *      
+	   *              GENERATE TRAJECTORY
+           *   
+           * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+	  std::cout << "PHASE | Starting trajectory generation..." << std::endl;
+
+	  // Create a list of widely spaced (x,y) waypoints, evenly spaced at 30m
+	  // later we will interpolate these waypoints with a spline and fill it
+	  // in with more points that control speed.
+	  vector <double> ptsx;
+	  vector <double> ptsy;
 
 
-// reference x,y, yaw states
-// either we will reference the starting point as where the car is or at
-// the previous path's end point
+	  // reference x,y, yaw states
+	  // either we will reference the starting point as where the car is or at
+	  // the previous path's end point
 
-double ref_x = car_x;
-double ref_y = car_y;
-double ref_yaw = deg2rad(car_yaw);
+	  double ref_x = car_x;
+	  double ref_y = car_y;
+	  double ref_yaw = deg2rad(car_yaw);
 
-// if previous path's size is almost empty, use the car as starting reference
-if (prev_size < 2){
-  // use two points that make the path tangent to the car,
-  // projecting bicycle model to the past
-  double prev_car_x = car_x - cos(car_yaw);
-  double prev_car_y = car_y + sin(car_yaw);
+	  // if previous path's size is almost empty, use the car as starting reference
+	  if (prev_size < 2){
+	    // use two points that make the path tangent to the car,
+	    // projecting bicycle model to the past
+	    double prev_car_x = car_x - cos(car_yaw);
+	    double prev_car_y = car_y + sin(car_yaw);
 
-  ptsx.push_back(prev_car_x);
-  ptsx.push_back(car_x);
+	    ptsx.push_back(prev_car_x);
+	    ptsx.push_back(car_x);
 
-  ptsy.push_back(prev_car_y);
-  ptsy.push_back(car_y);
+	    ptsy.push_back(prev_car_y);
+	    ptsy.push_back(car_y);
 
-}
-// use previous path's end point as starting reference
-else {
-  // redefine reference state to be previous path's end point
-  ref_x = previous_path_x[prev_size-1];
-  ref_y = previous_path_y[prev_size-1];
+	  }
+	  // use previous path's end point as starting reference
+	  else {
+	    // redefine reference state to be previous path's end point
+	    ref_x = previous_path_x[prev_size-1];
+	    ref_y = previous_path_y[prev_size-1];
 
-  double ref_x_prev = previous_path_x[prev_size-2];
-  double ref_y_prev = previous_path_y[prev_size-2];
+	    double ref_x_prev = previous_path_x[prev_size-2];
+	    double ref_y_prev = previous_path_y[prev_size-2];
 
-  ref_yaw = atan2(ref_y - ref_y_prev,
-		  ref_x - ref_x_prev);  // arctan
+	    ref_yaw = atan2(ref_y - ref_y_prev,
+			    ref_x - ref_x_prev);  // arctan
 
-  // use two points that make the path tangent to the previous path's end point
-  ptsx.push_back(ref_x_prev);
-  ptsx.push_back(ref_x);
+	    // use two points that make the path tangent to the previous path's end point
+	    ptsx.push_back(ref_x_prev);
+	    ptsx.push_back(ref_x);
 
-  ptsy.push_back(ref_y_prev);
-  ptsy.push_back(ref_y);
+	    ptsy.push_back(ref_y_prev);
+	    ptsy.push_back(ref_y);
   
-}
+	  }
 
-// in Frenet add evenly 30m spaced points ahead of the the starting reference
-for(int i=1; i<=3; i+=1){
-  double next_s = car_s + i*30;  // 30m steps
-  double next_d = 2 + 4 * lane;
-  vector <double> p = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-  ptsx.push_back(p[0]);
-  ptsy.push_back(p[1]);
-}
+	  // in Frenet add evenly 30m spaced points ahead of the the starting reference
+	  for(int i=1; i<=3; i+=1){
+	    double next_s = car_s + i*30;  // 30m steps
+	    double next_d = 2 + 4 * lane;
+	    vector <double> p = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+	    ptsx.push_back(p[0]);
+	    ptsy.push_back(p[1]);
+	  }
 
 #if DEBUG == 1
- std::cout << "ptsx ptsy raw" << ptsx.size() << std::endl;
- std::cout << "ptsx size=" << ptsx.size() << std::endl;
- std::cout << "ptsy size=" << ptsy.size() << std::endl;
- for (int i=0; i<ptsx.size(); i++)
-   std::cout << "i " << i << " x = " << ptsx[i] << " y = " << ptsy[i] << std::endl;
+	  std::cout << "ptsx ptsy raw" << ptsx.size() << std::endl;
+	  std::cout << "ptsx size=" << ptsx.size() << std::endl;
+	  std::cout << "ptsy size=" << ptsy.size() << std::endl;
+	  for (int i=0; i<ptsx.size(); i++)
+	    std::cout << "i " << i << " x = " << ptsx[i] << " y = " << ptsy[i] << std::endl;
 #endif
 
-for (int i = 0; i < ptsx.size(); i++){
+	  for (int i = 0; i < ptsx.size(); i++){
   
-  //shift point to car reference
-  // i.e. shift point such that car (ref_x, ref_y) is now at origin
-  double shift_x = ptsx[i]-ref_x;
-  double shift_y = ptsy[i]-ref_y;
+	    //shift point to car reference
+	    // i.e. shift point such that car (ref_x, ref_y) is now at origin
+	    double shift_x = ptsx[i]-ref_x;
+	    double shift_y = ptsy[i]-ref_y;
 
-  // rotate point so that ref_yaw is 0 degrees
-  ptsx[i] = shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw);
-  ptsy[i] = shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw);
+	    // rotate point so that ref_yaw is 0 degrees
+	    ptsx[i] = shift_x * cos(0 - ref_yaw) - shift_y * sin(0 - ref_yaw);
+	    ptsy[i] = shift_x * sin(0 - ref_yaw) + shift_y * cos(0 - ref_yaw);
 
-}
+	  }
 
 #if DEBUG == 1
- std::cout << "ptsx ptsy transformed" << ptsx.size() << std::endl;
- std::cout << "ptsx size=" << ptsx.size() << std::endl;
- std::cout << "ptsy size=" << ptsy.size() << std::endl;
- for (int i=0; i<ptsx.size(); i++)
-   std::cout << "i " << i << " x = " << ptsx[i] << " y = " << ptsy[i] << std::endl;
+	  std::cout << "ptsx ptsy transformed" << ptsx.size() << std::endl;
+	  std::cout << "ptsx size=" << ptsx.size() << std::endl;
+	  std::cout << "ptsy size=" << ptsy.size() << std::endl;
+	  for (int i=0; i<ptsx.size(); i++)
+	    std::cout << "i " << i << " x = " << ptsx[i] << " y = " << ptsy[i] << std::endl;
 #endif
 
 
-// create spline
-tk::spline s;
+	  // create spline
+	  tk::spline s;
 
-// set x,y points to the spline
-s.set_points(ptsx, ptsy);
-
-
-// use all unused points from previous path in next path
-for(int i=0; i<prev_size; i++){
-  next_x_vals.push_back(previous_path_x[i]);
-  next_y_vals.push_back(previous_path_y[i]);
-}
-
-// calculate how to break up spline points so that we travel 
-// at our desired reference velocity
-double target_x = 30.0; // look at a 30m horizon
-double target_y = s(target_x);
-double target_dist = sqrt(target_x*target_x + target_y*target_y);
-
-double x_add_on = 0;
-
-// fill up the rest of our path planner after filling it with
-// previous points, here we will always output n_wp (50) points
-for (int i=0; i<=n_wps-prev_size; i++){
-  double N = target_dist / (0.02 * ref_speed / 2.24);  // 1 mph / 2.24 -> m/s
-  double x_point = x_add_on  + (target_x) / N;
-  double y_point = s(x_point);
-
-  x_add_on = x_point;
-
-  double x_ref = x_point;  // not to be confused with ref_x
-  double y_ref = y_point;
+	  // set x,y points to the spline
+	  s.set_points(ptsx, ptsy);
 
 
+	  // use all unused points from previous path in next path
+	  for(int i=0; i<prev_size; i++){
+	    next_x_vals.push_back(previous_path_x[i]);
+	    next_y_vals.push_back(previous_path_y[i]);
+	  }
 
-  // undo rotation
-  x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
-  y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+	  // calculate how to break up spline points so that we travel 
+	  // at our desired reference velocity
+	  double target_x = 30.0; // look at a 30m horizon
+	  double target_y = s(target_x);
+	  double target_dist = sqrt(target_x*target_x + target_y*target_y);
 
-  // undo shift
-  x_point += ref_x;
-  y_point += ref_y;
+	  double x_add_on = 0;
 
-  next_x_vals.push_back(x_point);
-  next_y_vals.push_back(y_point);
+	  // fill up the rest of our path planner after filling it with
+	  // previous points, here we will always output n_wp (50) points
+	  for (int i=0; i<=n_wps-prev_size; i++){
+	    double N = target_dist / (0.02 * ref_speed / 2.24);  // 1 mph / 2.24 -> m/s
+	    double x_point = x_add_on  + (target_x) / N;
+	    double y_point = s(x_point);
 
-}
+	    x_add_on = x_point;
+
+	    double x_ref = x_point;  // not to be confused with ref_x
+	    double y_ref = y_point;
+
+
+
+	    // undo rotation
+	    x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+	    y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+
+	    // undo shift
+	    x_point += ref_x;
+	    y_point += ref_y;
+
+	    next_x_vals.push_back(x_point);
+	    next_y_vals.push_back(y_point);
+
+	  }
 
 #if DEBUG == 1
 	  // print next path
