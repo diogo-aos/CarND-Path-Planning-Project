@@ -42,7 +42,10 @@ using Eigen::VectorXd;
  *
  * * * * * * * * * * * * * * * * * * * * * * * * */
 
-double GOAL_SPEED = 22.13; //ms = 49.8mph
+double TO_MPH = 2.23694;  // m.s to mph
+double TO_MS = 0.44704;   // mph to m.s
+
+double GOAL_SPEED = 49.5; //ms = 49.8mph
 double TARGET_SPEED = 49.5; //ms
 
 double SLOW_ACC = 0.22369;  // 5m.s^2
@@ -59,25 +62,49 @@ public:
 
   double x;
   double y;
+  double yaw;
 
   double vx;
   double vy;
 
-  double v;
+  double v;     // m.s
+  double v_mph; // mph
 
   double s;
   double d;
 
-  double compute_speed(){
+  int lane;
+
+  
+  double update_v(double new_vx, double new_vy){
+    vx = new_vx;
+    vy = new_vy;
+    // compute speed
     v = sqrt(vx*vx + vy*vy);
+    v_mph = v * TO_MPH;
     return v;
   }
+  
+  double update_loc(double new_d, double new_s){
+    s = new_s;
+    d = new_d;
 
+    // compute lane
+    if (d>0 && d<4)
+      lane = 0;
+    else if(d>4 && d<8)
+      lane = 1;
+    else if(d>8 && d<12)
+      lane = 2;
+    return d;
+  }
+  
 };
 
 
 // keep track of other cars
 vector <Car> cars;
+Car EC;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * *
  *                                               *
@@ -260,10 +287,25 @@ int main() {
 	  int prev_size = previous_path_x.size();
 
 	  // print car state
-	  std::cout << "------------------------------------------" << std::endl;
-	  std::cout << "x:" << car_x << "\t y:" << car_y << "\t yaw:" << car_yaw << std::endl;
-	  std::cout << "s:" << car_s << "\t d:" << car_d << "\t speed:" << car_speed << std::endl;
-	  std::cout << "lane:" << lane << "\tref speed:" << ref_speed << std::endl;
+	  for (int i=0; i<30; i++)
+	    std::cout << "- ";
+	  std::cout << std::endl;
+
+	  std::cout << "x:" << car_x;
+	  std::cout << "\t y:" << car_y;
+	  std::cout << "\t yaw:" << car_yaw;
+	  std::cout << std::endl;
+
+	  std::cout << "s:" << car_s;
+	  std::cout << "\t d:" << car_d;
+	  std::cout << "\t speed:" << car_speed;
+	  std::cout << "\ttarget speed:" << TARGET_SPEED;
+	  std::cout << std::endl;
+
+	  std::cout << "lane:" << lane;
+	  std::cout << "\tref speed:" << ref_speed;
+	  std::cout << std::endl;
+
 	  std::cout << "Previous path size: " << prev_size << "\t consumed " << n_wps - previous_path_x.size() << " waypoints" << std::endl;
 	  std::cout << "consumed " << n_wps - previous_path_x.size() << " waypoints" << std::endl;
 
@@ -282,7 +324,7 @@ int main() {
 	  }
 
 
-
+	  TARGET_SPEED = GOAL_SPEED;
           /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
            *      
 	   *              CHECK OTHER CARS
@@ -301,7 +343,9 @@ int main() {
 	  double my_lane_center = lane * 4 + 2;
 
 
-	  // update our internal library of cars
+	  /*
+	   * update our internal library of cars
+	   */
 	  for (int i=0; i < sensor_fusion.size(); i++){
 	    int id = sensor_fusion[i][0];
 	    int cars_i=cars.size();  // by default assume it's a new car that will be added
@@ -323,20 +367,18 @@ int main() {
 
 	    // update this car's values from sensor fusion
 	    cars[cars_i].id = sensor_fusion[i][0];
-	    cars[cars_i].d = sensor_fusion[i][6];
-	    cars[cars_i].s = sensor_fusion[i][5];
-	    cars[cars_i].vx = sensor_fusion[i][3];
-	    cars[cars_i].vx = sensor_fusion[i][4];
-	    cars[cars_i].compute_speed();
+	    cars[cars_i].update_loc(sensor_fusion[i][6], sensor_fusion[i][5]);
+	    cars[cars_i].update_v(sensor_fusion[i][3], sensor_fusion[i][4]);
 	  }
 
 	  //find ref_v to use
 	  for (int i=0; i < cars.size(); i++){
 	    // print car info
 	    std::cout << "Car " << cars[i].id;
-	    std::cout << "\tv:" << cars[i].v * 2.23694;
+	    std::cout << "\tv:" << cars[i].v_mph;
 	    std::cout << "\ts:" << cars[i].s;
-	    std::cout << "\td:" << cars[i].s << std::endl;
+	    std::cout << "\td:" << cars[i].d;
+	    std::cout << std::endl;
 
 	    // transform check_s so car_s is reference
 
@@ -356,6 +398,7 @@ int main() {
 		// lanes
 		//ref_speed = check_speed; //mph
 		too_close = true;
+		TARGET_SPEED = cars[i].v_mph - FAST_ACC;
 		if (lane > 0) {
 		  lane = 0;
 		}
@@ -363,10 +406,10 @@ int main() {
 	    } // end if car is in my lane
 	  } // end for sensor fusion
 
-	  if (too_close){
+	  if (ref_speed - TARGET_SPEED > FAST_ACC){
 	    ref_speed -= FAST_ACC;
 	  }
-	  else if(ref_speed < TARGET_SPEED){
+	  else if(ref_speed - TARGET_SPEED < - FAST_ACC){
 	    ref_speed += FAST_ACC;
 	  }
 
