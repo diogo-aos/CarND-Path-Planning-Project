@@ -1,0 +1,59 @@
+<h1 id="carnd-path-planning-project">CarND-Path-Planning-Project</h1>
+<p>Self-Driving Car Engineer Nanodegree Program</p>
+<h2 id="project-goal">Project Goal</h2>
+<p>The goal of this project was to safely navigate around a virtual highway with other traffic that is driving +-10 MPH of the 50 MPH speed limit. The inputs are:</p>
+<ul>
+<li>the car's localization;</li>
+<li>sensor fusion data (location and velocity data from other cars);</li>
+<li>a sparse map list of waypoints which describe the highway's path</li>
+</ul>
+<p>The car should try to go as close as possible to the 50 MPH speed limit, which means passing slower traffic when possible. The car should avoid hitting other cars at all cost as well as driving inside of the marked road lanes at all times, unless going from one lane to another. The car should be able to make one complete loop around the 6946m highway. Since the car is trying to go 50 MPH, it should take a little over 5 minutes to complete 1 loop. Also the car should not experience total acceleration over 10 m/s^2 and jerk that is greater than 10 m/s^3.</p>
+<h2 id="considerations">Considerations</h2>
+<ol style="list-style-type: decimal">
+<li><p>The car uses a perfect controller and will visit every (x,y) point it recieves in the list every .02 seconds (50H&lt;). The units for the (x,y) points are in meters and the spacing of the points determines the speed of the car. The vector going from a point to the next point in the list dictates the angle of the car. Acceleration both in the tangential and normal directions is measured along with the jerk, the rate of change of total acceleration. The (x,y) point paths that the planner receives should not have a total acceleration that goes over 10 m/s^2, also the jerk should not go over 50 m/s^3.</p></li>
+<li><p>There will be some latency between the simulator running and the path planner returning a path, with optimized code usually its not very long maybe just 1-3 time steps. During this delay the simulator will continue using points that it was last given, because of this its a good idea to store the last points used to achieve a smooth transition. previous_path_x, and previous_path_y are helpful for this transition since they show the last points given to the simulator controller with the processed points already removed.</p></li>
+</ol>
+<h2 id="implementation">Implementation</h2>
+<h3 id="making-sense-of-other-cars">Making sense of other cars</h3>
+<p>One of the first things to do on a new iteration is to process information about what the car is sensing on the road. In particular, to make sense of the other cars driving in the same direction as the ego vehicle. A <code>Car</code> class was implemented to make this an easier task work on.</p>
+<p>Each time a new car is spotted, it's added to an internally kept <code>Car</code> library. This way we can keep track of data about other cars from past iterations, if we wish. When a car's location is updated, its current lane is automatically computed as well. When a car's velocities are updated, its absolute velocity and corresponding MPH conversion are also computed.</p>
+<p>With these data on hand, two sets of data are computed: * the flags for warning of a car ahead, to the left or to the right; * the speed of each lane.</p>
+<h4 id="flagging-cars-around-ego-vehicle">Flagging cars around ego vehicle</h4>
+<div class="figure">
+<img src="report/car_around_flags.png" alt="Figure 1. Strategy for activating the vehicle ahead, to the left or to the right flags." /><p class="caption">Figure 1. Strategy for activating the vehicle ahead, to the left or to the right flags.</p>
+</div>
+<p>For each sensed car we predict what will be its location in the future. How far in the future coincides with how many points in the past trajectory were left &quot;unconsumed&quot;. As an example, let us consider that 40 points of the previous trajectory were not consumed. Trajectory points are consumed with a frequency of 50Hz (or every 0.02s). We will predict where the car will be in 0.8s (40 * 0.02s). If this future location is ahead and within 30m of the current location of the ego vehicle, then we consider there is a car ahead. In the figure above the red ball corresponding to the predicted car location should be inside a painted area to activate its corresponding flag. It should be noted that we're only considering the <code>s</code> component of Frenet coordinates of both vehicles.</p>
+<p>A similar approach is taken for the car to the left and to the right flags. This time, however, we consider 30m ahead and 15m behind the ego vehicle.</p>
+<h2 id="lane-speeds">Lane speeds</h2>
+<div class="figure">
+<img src="report/lane_speeds.png" alt="Figure 2. Strategy for computing the speed of each lane." /><p class="caption">Figure 2. Strategy for computing the speed of each lane.</p>
+</div>
+<p>Computing the lane speed is useful when deciding to which lane we want to change to. A simple strategy was used. We look ahead 100m of the ego vehicle. If there is a car within those 100m, than the lane speed will be that vehicle's speed. If there are multiple cars within that area, the speed of the car closest to the ego vehicle will be used. If there are no cars within the area in a certain lane, that lane's speed is the <code>GOAL_SPEED</code>.</p>
+<h3 id="decision-making">Decision making</h3>
+<p>The problem at hand didn't require complex decision making to hit all criteria. We want to move as fast as possible in a legal (observing speed limit and keeping within lane limits), safe (avoiding collisions) and confortable manner (not accelerating or jerking hard). Legality and safety are addressed in this section. Keeping lane limits and confort are addressed in the trajectory generation section.</p>
+<p>Before going on about decision making, some considerations about the implementation must be introduced. The maximum speed that the car will ever drive (henceforth referred to as the <code>GOAL_SPEED</code>) is 49.5 MPH, just under the legal limit of 50 MPH. That is the desired speed at any given time. If it is not possible to drive at that speed, we want to drive at another legal, safe speed, henceforth referred to as <code>TARGET_SPEED</code>. <code>TARGET_SPEED</code> is, then, our goal whenever <code>GOAL_SPEED</code> is not possible. The reference speed (<code>REF_SPEED</code>) is the real speed the car will be driving. In the beginning <code>REF_SPEED</code> is 0 since the car is stopped in the highway. Overtime, it will gradually rise or fall given a <code>TARGET_SPEED</code>, always respecting the maximum acceleratons constraints.</p>
+<p>To avoid collisions the chosen strategy was to slow down whenever a car ahead is detected. The <code>TARGET_SPEED</code> will be that car's speed.</p>
+<table>
+<tbody>
+<tr class="odd">
+<td align="left"><code>REF_SPEED</code></td>
+<td align="left">actual speed the car's controller will implement</td>
+</tr>
+<tr class="even">
+<td align="left"><code>TARGET_SPEED</code></td>
+<td align="left">speed the controller is working torwards</td>
+</tr>
+<tr class="odd">
+<td align="left"><code>GOAL_SPEED</code></td>
+<td align="left">ideal speed, always 49.5 MPH</td>
+</tr>
+</tbody>
+</table>
+<h3 id="trajectory-generation">Trajectory generation</h3>
+<p>A really helpful resource for doing this project and creating smooth trajectories was using http://kluge.in-chemnitz.de/opensource/spline/, the spline function is in a single hearder file is really easy to use.</p>
+<h2 id="the-code">The code</h2>
+<h3 id="making-sense-of-other-cars-1">Making sense of other cars</h3>
+<h3 id="decision-making-1">Decision making</h3>
+<h3 id="trajectory-generation-1">Trajectory generation</h3>
+<h2 id="results">Results</h2>
+<p>Over 6.10 miles, 7 minutes and 44 seconds and 4709 readings, the average speed was 47.53 MPH</p>
