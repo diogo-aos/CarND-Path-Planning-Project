@@ -1,5 +1,7 @@
 build/
+video/
 *~
+*#*
 output.txt
 make_output.txt
 make_time.txt

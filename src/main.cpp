@@ -13,14 +13,16 @@
 #include "helpers.h"
 #include "json.hpp"
 
+#include "Car.h"
+#include "Variables.h"
+
 /* * * * * * * * * * * * * * * * * * * * * * * * *
  *
  *         MY CONSTANTS
  *
  * * * * * * * * * * * * * * * * * * * * * * * * */
 
-
-#define DEBUG 0
+#define DEBUG 1
 
 /* * * * * * * * * * * * * * * * * * * * * * * * *
  *                                               *
@@ -42,64 +44,10 @@ using Eigen::VectorXd;
  *
  * * * * * * * * * * * * * * * * * * * * * * * * */
 
-double TO_MPH = 2.23694;  // m.s to mph
-double TO_MS = 0.44704;   // mph to m.s
-
-double GOAL_SPEED = 49.5; //ms = 49.8mph
-double TARGET_SPEED = 49.5; //ms
-
-double SLOW_ACC = 0.22369;  // 5m.s^2
-double FAST_ACC = 0.4250186;  // 9.5m.s^2
-
 double ref_speed = 0; //mph
 int lane = 1;
 
 double acc;
-
-class Car {
-public:
-  int id;
-
-  double x;
-  double y;
-  double yaw;
-
-  double vx;
-  double vy;
-
-  double v;     // m.s
-  double v_mph; // mph
-
-  double s;
-  double d;
-
-  int lane;
-
-  
-  double update_v(double new_vx, double new_vy){
-    vx = new_vx;
-    vy = new_vy;
-    // compute speed
-    v = sqrt(vx*vx + vy*vy);
-    v_mph = v * TO_MPH;
-    return v;
-  }
-  
-  double update_loc(double new_d, double new_s){
-    s = new_s;
-    d = new_d;
-
-    // compute lane
-    if (d>0 && d<4)
-      lane = 0;
-    else if(d>4 && d<8)
-      lane = 1;
-    else if(d>8 && d<12)
-      lane = 2;
-    return d;
-  }
-  
-};
 
 
 // keep track of other cars
@@ -110,6 +58,32 @@ Car EC;
  *                                               *
  *                                               *
  * * * * * * * * * * * * * * * * * * * * * * * * */
+
+vector <int> index_sort(vector <double> &vals){
+  // create and initialize indices vector
+  vector <int> K (vals.size());
+  for (int i=0; i<vals.size(); i++)
+    K[i] = i;
+  
+  //std::cout << "index_sort | K init:";
+  //for (int i=0; i<K.size(); i++)
+  //std::cout << K[i] << ",";
+  //std::cout << std::endl;
+
+  int tmp;
+  for (int i=0; i<vals.size()-1; i++){
+    for (int j=i+1; j<vals.size(); j++){
+      if (vals[K[i]]< vals[K[j]]){
+	tmp = K[i];
+	K[i] = K[j];
+	K[j] = tmp;
+      }
+      //std::cout << "index_sort | i=" << i << "  j=" << j << std::endl;
+    }
+  }
+
+  return K;
+}
 
 
 void log_print(char * str, int level){
@@ -280,9 +254,6 @@ int main() {
            *   
            * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-
-
-
 	  int n_wps = 50;
 	  int prev_size = previous_path_x.size();
 
@@ -325,6 +296,7 @@ int main() {
 
 
 	  TARGET_SPEED = GOAL_SPEED;
+
           /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
            *      
 	   *              CHECK OTHER CARS
@@ -332,15 +304,25 @@ int main() {
            * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 	  std::cout << "PHASE | Checking other cars..." << std::endl;
 
-
 	  bool too_close = false;
-	  double lane_forward[3];
-	  double lane_backward[3];
-
-	  vector <double> check_s_t;
-
 
 	  double my_lane_center = lane * 4 + 2;
+	  
+	  vector<double> lane_speeds(3);
+	  vector<double> lane_s_dist(3); // s distance to car ahead in each lane except mine
+	                                 // used only for computing lane speeds
+
+	  for(int i=0; i<lane_speeds.size(); i++){
+	    lane_speeds[i] = GOAL_SPEED;
+	    lane_s_dist[i] = 999999999;
+	  } 
+
+
+	  bool is_car_ahead = false,
+               is_car_left = false,
+	       is_car_right = false;
+
+	  Car car_ahead, car_left, car_right;
 
 
 	  /*
@@ -348,7 +330,7 @@ int main() {
 	   */
 	  for (int i=0; i < sensor_fusion.size(); i++){
 	    int id = sensor_fusion[i][0];
-	    int cars_i=cars.size();  // by default assume it's a new car that will be added
+	    int cars_i = cars.size();  // by default assume it's a new car that will be added
 
 	    // look for this car's ID in our car library
 	    for (int j=0; j<cars.size(); j++){
@@ -371,7 +353,7 @@ int main() {
 	    cars[cars_i].update_v(sensor_fusion[i][3], sensor_fusion[i][4]);
 	  }
 
-	  //find ref_v to use
+	  // cycle throuth other cars on the road
 	  for (int i=0; i < cars.size(); i++){
 	    // print car info
 	    std::cout << "Car " << cars[i].id;
@@ -380,31 +362,82 @@ int main() {
 	    std::cout << "\td:" << cars[i].d;
 	    std::cout << std::endl;
 
-	    // transform check_s so car_s is reference
+	    double s_delta = cars[i].s - car_s;
+	    if ((s_delta > 0) && (s_delta < 100) && (s_delta < lane_s_dist[cars[i].lane])){
+	      lane_s_dist[cars[i].lane] = s_delta;
+	      lane_speeds[cars[i].lane] = cars[i].v_mph;
+	    }
 
-	    //car is in my lane
-	    if ( (cars[i].d > my_lane_center - 2) && (cars[i].d < my_lane_center + 2) ){
-    
-	      // if using previous points can project s value out
-	      double check_s = cars[i].s;
-	      check_s += ((double) prev_size * 0.02 * cars[i].v);  
-	      
-	      //check s values greater than mine and s gap
-	      if ((check_s > car_s) && (check_s-car_s) < 30){
-		std::cout << "Car " << cars[i].id << "triggered lane change" << std::endl;
-		std::cout << "my_lane_center:" << my_lane_center << std::endl;
-		//do some logic here, lower reference velocity so we don't crash 
-		// into the car in front of us, ould also flag to try to change
-		// lanes
-		//ref_speed = check_speed; //mph
-		too_close = true;
-		TARGET_SPEED = cars[i].v_mph - FAST_ACC;
-		if (lane > 0) {
-		  lane = 0;
-		}
-	      }
-	    } // end if car is in my lane
-	  } // end for sensor fusion
+	    vector <double> future_loc = cars[i].predict(prev_size * 0.02);
+	    //std::cout << "future_loc: " << future_loc[0] << std::endl;
+
+	    // if car is in my lane
+	    // if the gap between ego current position and car's predicted position
+	    // is less than SAFETY_DIST meters, do something
+	    if ( (cars[i].lane == lane) && future_loc[0] > car_s && ((future_loc[0] - car_s) < SAFETY_DIST)){
+	      is_car_ahead = true;
+	      car_ahead = cars[i];
+	    }
+
+	    // if car is on left
+	    else if ( (cars[i].lane == lane-1) &&
+		      future_loc[0] >= car_s - SAFETY_DIST/2 &&
+		      future_loc[0] <= car_s + SAFETY_DIST){
+	      is_car_left = true;
+	      car_left = cars[i];
+	    }
+
+	    // if car is on right
+	    else if ( (cars[i].lane == lane+1) &&
+		      future_loc[0] >= car_s - SAFETY_DIST/2 &&
+		      future_loc[0] <= car_s + SAFETY_DIST){
+	      is_car_right = true;
+	      car_right = cars[i];
+	    }
+
+
+	  } // end for cycle other cars on road
+
+	  std::cout <<  "car_ahead (" << is_car_ahead << "): " << car_ahead.id;
+	  std::cout << "\tcar_left (" << is_car_left << "): " << car_left.id;
+	  std::cout << "\tcar_right (" << is_car_right << "): " << car_right.id << std::endl;
+
+
+          /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+           *      
+	   *              DECISION MAKING
+           *   
+           * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+	  std::cout << "PHASE | decision making..." << std::endl;
+	  
+	  // compute fastast lane
+	  vector <int> sorted_fast_lane = index_sort(lane_speeds);
+
+	  std::cout << "lane speeds: ";
+	  for (int i=0; i<lane_speeds.size(); i++)
+	    std::cout << sorted_fast_lane[i] << ":" << lane_speeds[sorted_fast_lane[i]] << "\t";
+	  std::cout << std::endl;
+	  
+
+	  // if there is a car ahead, set my speed to that car
+	  if (is_car_ahead){
+	    
+	    if (lane > 0 and !is_car_left){ // try changing to left first
+	      lane--;
+	    }
+	    else if (lane < 2 and !is_car_right){ // try changing to right
+	      lane++;
+	    }
+	    else{ // if lane change not possible, set target speed to car ahead 
+	      TARGET_SPEED = car_ahead.v_mph - FAST_ACC;
+	    }
+	  } // end if car is in my lane
+
+
+	  // if my lane is not the fastest, try to change
+	  //if (lane_speeds[lane] < lane_speeds[sorted_fast_lane[0]])
+	  //  lane = sorted_fast_lane[0];
+
 
 	  if (ref_speed - TARGET_SPEED > FAST_ACC){
 	    ref_speed -= FAST_ACC;
@@ -412,15 +445,6 @@ int main() {
 	  else if(ref_speed - TARGET_SPEED < - FAST_ACC){
 	    ref_speed += FAST_ACC;
 	  }
-
-          /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
-           *      
-	   *              DECISION MAKING
-           *   
-           * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-
-
 
 
           /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
