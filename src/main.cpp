@@ -542,7 +542,6 @@ int main() {
 	    std::cout << "i " << i << " x = " << ptsx[i] << " y = " << ptsy[i] << std::endl;
 #endif
 
-
 	  // create spline
 	  tk::spline s;
 
@@ -575,8 +574,6 @@ int main() {
 
 	    double x_ref = x_point;  // not to be confused with ref_x
 	    double y_ref = y_point;
-
-
 
 	    // undo rotation
 	    x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);

@@ -19,6 +19,14 @@ The car should try to go as close as possible to the 50 MPH speed limit, which m
 
 
 ## Implementation
+
+The implementation is divided into 3 section:
+
+ - **Making sense of other cars** where the processing of sensor fusion data is explained;
+ - **Decision making** where the logic and strategies for the vehicle's decisions are presented;
+ - **Trajectory generation** where the process of generating points for the trajectory the vehicle will follow is documented.
+
+
 ### Making sense of other cars
 
 One of the first things to do on a new iteration is to process information about what the car is sensing on the road.
@@ -172,24 +180,108 @@ If that is not the case (as in the beginning of the simulation), then we start c
 The current position and a prediction into the past based on current velocity are added to the spline.
 If we have 2 or more points from the previous trajectory, then we start creating a path from the end of the previous path.
 In this case, the last 2 points are added to the spline.
+```C
+if (prev_size < 2){
+  double prev_car_x = car_x - cos(car_yaw);
+  double prev_car_y = car_y + sin(car_yaw);
+
+  ptsx.push_back(prev_car_x);
+  ptsx.push_back(car_x);
+
+  ptsy.push_back(prev_car_y);
+  ptsy.push_back(car_y);
+
+}
+else {
+  ref_x = previous_path_x[prev_size-1];
+  ref_y = previous_path_y[prev_size-1];
+
+  double ref_x_prev = previous_path_x[prev_size-2];
+  double ref_y_prev = previous_path_y[prev_size-2];
+
+  ref_yaw = atan2(ref_y - ref_y_prev,
+                  ref_x - ref_x_prev);  // arctan
+
+  ptsx.push_back(ref_x_prev);
+  ptsx.push_back(ref_x);
+
+  ptsy.push_back(ref_y_prev);
+  ptsy.push_back(ref_y);
+}
+```
 
 Then we add 3 more points to the spline, spaced 30m apart.
 These points will either be on the current lane or on another lane if a lane change is to be performed.
 
+```C
+for(int i=1; i<=3; i+=1){
+  double next_s = car_s + i*30;  // 30m steps
+  double next_d = 2 + 4 * lane;
+  vector <double> p = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+  ptsx.push_back(p[0]);
+  ptsy.push_back(p[1]);
+}
+```
+
 ![Figure 4. Choice of points for the spline.](report/spline0.png)
 
+Before being added to the spline, all selected points are transformed such that the ego vehicle is at the origin (translation) and is pointing directly at the `x` axis (rotation).
 
-A really helpful resource for doing this project and creating smooth trajectories was using http://kluge.in-chemnitz.de/opensource/spline/, the spline function is in a single hearder file is really easy to use.
+We then use the spline to compute the future points and add them to the next points list.
+On the first iteration we will be adding 50 points since there are no points from a previous trajectory.
+Afterwards, less than 10 points are usually added.
+Before adding the points to the next points list, we have to undo the transformation (translation and rotation).
 
+The points generated from the spline are spaced from each other such that the speed is `REF_SPEED`.
+This is an approximation, however.
+The spacing is based on the hypotenuse from the first point of the spline to a point 30m ahead.
+In reality, the path is a polynomial.
+In this project this approximation works fine, but contexts where maneuvers with sharp turn angles happen this approximation might exceed acceleration limits.
+
+![Figure 5. Generation of spline points. This plot is referent to the middle of a lane change with a `REF_SPEED` of 39.95 MPH.](report/spline_plot.png)
+
+```C
+for (int i=0; i<=n_wps-prev_size; i++){
+  double N = target_dist / (0.02 * ref_speed / 2.24);
+  double x_point = x_add_on  + (target_x) / N;
+  double y_point = s(x_point);
+
+  x_add_on = x_point;
+
+  double x_ref = x_point;
+  double y_ref = y_point;
+
+  // undo rotation
+  x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+  y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+
+  // undo shift
+  x_point += ref_x;
+  y_point += ref_y;
+
+  next_x_vals.push_back(x_point);
+  next_y_vals.push_back(y_point);
+}
+```
 
 
 ## Results
-Over 6.10 miles, 7 minutes and 44 seconds and 4709 readings, the average speed was 47.53 MPH
+Over 6.10 miles, 7 minutes and 44 seconds and 4709 readings, the average speed was 47.53 MPH.
+The performance of the car can be observed in the following video.
+
+[Youtube video](https://www.youtube.com/watch?v=zb0H-bjDqC0)
+
+There are situations where the vehicle could perform lane changes to a faster lane, but does not because there is a car on that lane nearby, even though there is anouth space to perform a safe maneuver.
+The activation of the `CAR_LEFT` and `CAR_RIGHT` flags are perhaps too strict and could be relaxed.
 
 
-
-## To improve
+## Improvements
 Although implemented, the lane speeds ended up not being used.
 Instead of always trying to change to the left first, we should try to change to the fastest adjacent lane first.
-We could also implement a more tiered planner where we will change to one lane just to get to the fastest lane.
+We could also implement a more tiered planner where the vehicle changes to one lane just to get to the fastest lane.
+
+To ensure the vehicle never exceeds the acceleration limits, the trajectory can be checked _a posteriori_.
+If the spacing of the points is such that the limits are exceeded, it means the hypotenuse approximations has failed.
+A solution to this is to break the 30m range into smaller intervals such that the hypotenuse of each interval is closer to the spline polynomial.
+
 
