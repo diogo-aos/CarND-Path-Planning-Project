@@ -23,7 +23,27 @@
 <img src="report/car_around_flags.png" alt="Figure 1. Strategy for activating the vehicle ahead, to the left or to the right flags." /><p class="caption">Figure 1. Strategy for activating the vehicle ahead, to the left or to the right flags.</p>
 </div>
 <p>For each sensed car we predict what will be its location in the future. How far in the future coincides with how many points in the past trajectory were left &quot;unconsumed&quot;. As an example, let us consider that 40 points of the previous trajectory were not consumed. Trajectory points are consumed with a frequency of 50Hz (or every 0.02s). We will predict where the car will be in 0.8s (40 * 0.02s). If this future location is ahead and within 30m of the current location of the ego vehicle, then we consider there is a car ahead. In the figure above the red ball corresponding to the predicted car location should be inside a painted area to activate its corresponding flag. It should be noted that we're only considering the <code>s</code> component of Frenet coordinates of both vehicles.</p>
-<p>A similar approach is taken for the car to the left and to the right flags. This time, however, we consider 30m ahead and 15m behind the ego vehicle.</p>
+<p>A similar approach is taken for the car to the left and to the right flags. This time, however, we consider 30m ahead and 15m behind the ego vehicle. These three flags will be referred to as <code>CAR_AHEAD</code>, <code>CAR_LEFT</code> and <code>CAR_RIGHT</code> for the remainder of the document.</p>
+<p>The code implementing the flags is shown below. <code>future_loc</code> is the predicted position of the car. <code>car_s</code> is the the ego vehicle's location along the road (Frenet coordinates). <code>SAFETY_DIST</code> is the safety distance to use - it was set to 30m.</p>
+<pre class="sourceCode C"><code class="sourceCode c"><span class="kw">if</span> ( (cars[i].lane == lane) &amp;&amp; future_loc[<span class="dv">0</span>] &gt; car_s &amp;&amp; 
+     ((future_loc[<span class="dv">0</span>] - car_s) &lt; SAFETY_DIST)){
+  is_car_ahead = true;
+  car_ahead = cars[i];
+}
+<span class="co">// if car is on left</span>
+<span class="kw">else</span> <span class="kw">if</span> ( (cars[i].lane == lane<span class="dv">-1</span>) &amp;&amp;
+          future_loc[<span class="dv">0</span>] &gt;= car_s - SAFETY_DIST/<span class="dv">2</span> &amp;&amp;
+          future_loc[<span class="dv">0</span>] &lt;= car_s + SAFETY_DIST){
+  is_car_left = true;
+  car_left = cars[i];
+}
+<span class="co">// if car is on right</span>
+<span class="kw">else</span> <span class="kw">if</span> ( (cars[i].lane == lane<span class="dv">+1</span>) &amp;&amp;
+          future_loc[<span class="dv">0</span>] &gt;= car_s - SAFETY_DIST/<span class="dv">2</span> &amp;&amp;
+          future_loc[<span class="dv">0</span>] &lt;= car_s + SAFETY_DIST){
+  is_car_right = true;
+  car_right = cars[i];
+}</code></pre>
 <h2 id="lane-speeds">Lane speeds</h2>
 <div class="figure">
 <img src="report/lane_speeds.png" alt="Figure 2. Strategy for computing the speed of each lane." /><p class="caption">Figure 2. Strategy for computing the speed of each lane.</p>
@@ -32,7 +52,6 @@
 <h3 id="decision-making">Decision making</h3>
 <p>The problem at hand didn't require complex decision making to hit all criteria. We want to move as fast as possible in a legal (observing speed limit and keeping within lane limits), safe (avoiding collisions) and confortable manner (not accelerating or jerking hard). Legality and safety are addressed in this section. Keeping lane limits and confort are addressed in the trajectory generation section.</p>
 <p>Before going on about decision making, some considerations about the implementation must be introduced. The maximum speed that the car will ever drive (henceforth referred to as the <code>GOAL_SPEED</code>) is 49.5 MPH, just under the legal limit of 50 MPH. That is the desired speed at any given time. If it is not possible to drive at that speed, we want to drive at another legal, safe speed, henceforth referred to as <code>TARGET_SPEED</code>. <code>TARGET_SPEED</code> is, then, our goal whenever <code>GOAL_SPEED</code> is not possible. The reference speed (<code>REF_SPEED</code>) is the real speed the car will be driving. In the beginning <code>REF_SPEED</code> is 0 since the car is stopped in the highway. Overtime, it will gradually rise or fall given a <code>TARGET_SPEED</code>, always respecting the maximum acceleratons constraints.</p>
-<p>To avoid collisions the chosen strategy was to slow down whenever a car ahead is detected. The <code>TARGET_SPEED</code> will be that car's speed.</p>
 <table>
 <tbody>
 <tr class="odd">
@@ -49,11 +68,41 @@
 </tr>
 </tbody>
 </table>
+<div class="figure">
+<img src="report/decision.jpg" alt="Figure 3. Strategy for changing lanes and avoiding collisions." /><p class="caption">Figure 3. Strategy for changing lanes and avoiding collisions.</p>
+</div>
+<p>The decision making implemented is very simple. No cost functions were used as the decisions to be made were limited to speed changes and lane changes based on the other vehicles on the road. These decisions can be effectively implemented with a simple flow described below.</p>
+<p>In essence, our vehicle is always on a <em>keep lane</em> state, except when it detects a vehicle ahead. Then we could say it would assume a <em>change lane left</em> or <em>change lane right</em> state. This is, however, an abstraction as no state machine was actually implemented.</p>
+<p>Whenever <code>CAR_AHEAD</code> is active, try to change lanes. If ego vehicle is not in the leftmost lane and <code>CAR_LEFT</code> is inactive, change to the left lane. If ego vehicle is not in the rightmost lane and <code>CAR_RIGHT</code> is inactive, change to the right lane. If lane change is not possitle, set the <code>TARGET_SPEED</code> to the speed of the vehicle ahead. In future iterations <code>CAR_AHEAD</code> will continue to be activated since the distance from the ego vehicle to the car ahead will have shortened during the desacceleration.</p>
+<p>The relevant code of the decision making process is shown below.</p>
+<pre class="sourceCode C"><code class="sourceCode c"><span class="kw">if</span> (is_car_ahead){
+  <span class="kw">if</span> (lane &gt; <span class="dv">0</span> and !is_car_left){ <span class="co">// try changing to left first</span>
+    lane--;
+  }
+  <span class="kw">else</span> <span class="kw">if</span> (lane &lt; <span class="dv">2</span> and !is_car_right){ <span class="co">// try changing to right</span>
+    lane++;
+  }
+  <span class="kw">else</span>{ <span class="co">// if lane change not possible, set target speed to car ahead </span>
+    TARGET_SPEED = car_ahead.v_mph - FAST_ACC;
+  }
+} <span class="co">// end if car is in my lane</span></code></pre>
+<p>It is also within the decision making portion of the code that a confortable speed transition is guaranteed. If <code>REF_SPEED</code> is over the <code>TARGET_SPEED</code> by more than the acceleration limit, reduce speed by that amount. If <code>REF_SPEED</code> is under the <code>TARGET_SPEED</code> by more than the acceleration limit, increase speed by that amount. The change in speed is 0.4250 MPH, corresponding to an acceleration of 9.5 m.s^2.</p>
+<pre class="sourceCode C"><code class="sourceCode c"><span class="kw">if</span> (ref_speed - TARGET_SPEED &gt; FAST_ACC){
+  ref_speed -= FAST_ACC;
+}
+<span class="kw">else</span> <span class="kw">if</span>(ref_speed - TARGET_SPEED &lt; - FAST_ACC){
+  ref_speed += FAST_ACC;
+}</code></pre>
 <h3 id="trajectory-generation">Trajectory generation</h3>
+<p>The created trajectories always have 50 points. This means we generate a trajectory for 1s into the future. At our <code>GOAL_SPEED</code> of 49.5 MPH, this translates to around 22m. The &quot;unconsumed&quot; points from the previous trajectory are all used. This ensures smoothness on lane changes and speed transitions.</p>
+<p>The spline library was used to generate the trajectories. We feed it points and it supplies a function that guarantees that all supplied points belong to its domain.</p>
+<p>The trajectory generation section of the code starts by checking if there are at least 2 points from the previous path left &quot;unconsumed&quot;. If that is not the case (as in the beginning of the simulation), then we start creating a path from the the current position of the ego vehicle. The current position and a prediction into the past based on current velocity are added to the spline. If we have 2 or more points from the previous trajectory, then we start creating a path from the end of the previous path. In this case, the last 2 points are added to the spline.</p>
+<p>Then we add 3 more points to the spline, spaced 30m apart. These points will either be on the current lane or on another lane if a lane change is to be performed.</p>
+<div class="figure">
+<img src="report/spline0.png" alt="Figure 4. Choice of points for the spline." /><p class="caption">Figure 4. Choice of points for the spline.</p>
+</div>
 <p>A really helpful resource for doing this project and creating smooth trajectories was using http://kluge.in-chemnitz.de/opensource/spline/, the spline function is in a single hearder file is really easy to use.</p>
-<h2 id="the-code">The code</h2>
-<h3 id="making-sense-of-other-cars-1">Making sense of other cars</h3>
-<h3 id="decision-making-1">Decision making</h3>
-<h3 id="trajectory-generation-1">Trajectory generation</h3>
 <h2 id="results">Results</h2>
 <p>Over 6.10 miles, 7 minutes and 44 seconds and 4709 readings, the average speed was 47.53 MPH</p>
+<h2 id="to-improve">To improve</h2>
+<p>Although implemented, the lane speeds ended up not being used. Instead of always trying to change to the left first, we should try to change to the fastest adjacent lane first. We could also implement a more tiered planner where we will change to one lane just to get to the fastest lane.</p>

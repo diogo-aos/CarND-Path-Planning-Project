@@ -419,7 +419,6 @@ int main() {
 	  std::cout << std::endl;
 	  
 
-	  // if there is a car ahead, set my speed to that car
 	  if (is_car_ahead){
 	    
 	    if (lane > 0 and !is_car_left){ // try changing to left first
